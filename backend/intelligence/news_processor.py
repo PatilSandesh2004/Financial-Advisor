@@ -23,15 +23,55 @@ class NewsProcessor:
         return normalized
 
     def map_to_portfolio(self, news_items: list[dict], portfolio: dict) -> list[dict]:
-        holdings = portfolio.get("holdings", [])
-        symbols = {h.get("symbol") for h in holdings if h.get("symbol")}
-        sectors = {h.get("sector") for h in holdings if h.get("sector")}
+        # Normalize holdings: portfolio may store holdings under a dict with
+        # keys like 'stocks' and 'mutual_funds'. Support both shapes.
+        raw_holdings = portfolio.get("holdings", {}) or {}
+        stocks_holdings = []
+        mutual_fund_holdings = []
+        if isinstance(raw_holdings, dict):
+            stocks_holdings = raw_holdings.get("stocks", []) or []
+            mutual_fund_holdings = raw_holdings.get("mutual_funds", []) or []
+        elif isinstance(raw_holdings, list):
+            # older format: flat list of stock dicts
+            stocks_holdings = raw_holdings
+
+        # Collect symbols from stock entries and from mutual fund top_holdings
+        symbols: set[str] = set()
+        sectors: set[str] = set()
+
+        for h in stocks_holdings:
+            if isinstance(h, dict):
+                sym = h.get("symbol")
+                sec = h.get("sector")
+                if sym:
+                    symbols.add(sym)
+                if sec:
+                    sectors.add(sec)
+            elif isinstance(h, str):
+                symbols.add(h)
+
+        for mf in mutual_fund_holdings:
+            # mutual fund top holdings may be a list of strings
+            if isinstance(mf, dict):
+                top = mf.get("top_holdings", []) or []
+                for t in top:
+                    if isinstance(t, str):
+                        symbols.add(t)
+            elif isinstance(mf, list):
+                for t in mf:
+                    if isinstance(t, str):
+                        symbols.add(t)
+
         relevant = []
         for n in news_items:
-            if symbols.intersection(set(n.get("stocks", []))):
+            # news stocks/sectors may be lists of strings
+            news_stocks = set(n.get("stocks", []) or [])
+            news_sectors = set(n.get("sectors", []) or [])
+
+            if symbols.intersection(news_stocks):
                 relevant.append(n)
                 continue
-            if sectors.intersection(set(n.get("sectors", []))):
+            if sectors.intersection(news_sectors):
                 relevant.append(n)
                 continue
             if n.get("scope") == "MARKET_WIDE":

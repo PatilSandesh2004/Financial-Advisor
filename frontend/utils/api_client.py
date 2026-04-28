@@ -47,15 +47,18 @@ def get_market_snapshot() -> dict | None:
 
 def stream_chat(*, session_id: str, message: str, portfolio_id: str | None) -> Iterable[str]:
     payload = {"session_id": session_id, "message": message, "portfolio_id": portfolio_id}
+    # Use the streaming endpoint for SSE
     with httpx.Client(timeout=None) as client:
-        with client.stream("POST", f"{API_BASE_URL}/api/v1/chat", json=payload) as resp:
+        with client.stream("POST", f"{API_BASE_URL}/api/v1/chat/stream", json=payload) as resp:
             resp.raise_for_status()
-            for line in resp.iter_lines():
+            for line in resp.iter_lines(decode_unicode=True):
                 if not line:
                     continue
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                if data == "[DONE]":
-                    return
-                yield data
+                line = line.strip()
+                # SSE lines may be 'event: ...' or 'data: ...'
+                if line.startswith("data:"):
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        return
+                    yield data
+                # ignore other SSE metadata lines

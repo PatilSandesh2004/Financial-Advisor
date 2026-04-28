@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # Groq
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
+    groq_router_model: str = Field(default="llama-3.1-8b-instant", alias="GROQ_ROUTER_MODEL")
     groq_max_tokens: int = Field(default=1024, alias="GROQ_MAX_TOKENS")
     groq_temperature: float = Field(default=0.2, alias="GROQ_TEMPERATURE")
 
