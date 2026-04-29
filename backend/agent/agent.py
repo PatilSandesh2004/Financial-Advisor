@@ -38,31 +38,44 @@ class AdvisorAgent:
 
     async def stream_answer(
         self, *, session_id: str, query: str, portfolio_id: str | None
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict]:
         """
-        Stream answer using Router → Extractor → Reasoner pattern:
-        1. Router: Fast small model determines what data is needed
-        2. Extractor: Filter data based on routing decision
-        3. Reasoner: Full model gets only relevant data + query
+        Stream answer using Router → Extractor → Reasoner pattern.
+        Yields dicts with a "type" field:
+          {"type": "thinking", "step": ..., ...}  — intermediate reasoning steps shown in UI
+          {"type": "token",    "content": str}     — response tokens streamed to the user
         """
         data = load_all_data()
         portfolio = get_portfolio(portfolio_id) if portfolio_id else None
 
-        # Step 1: Route query to determine data needs
+        # Step 1: Route — fast model decides what data is needed
+        yield {"type": "thinking", "step": "routing", "message": "Analyzing your question…"}
         routing_decision = await self.router.route_query(query)
         print(f"[Router] Routing decision: {routing_decision}")
 
-        # Add portfolio context if available
+        stocks = routing_decision.get("stocks", [])
+        sectors = routing_decision.get("sectors", [])
+        news = routing_decision.get("news", [])
+        funds = (routing_decision.get("funds") or {}).get("ids", [])
+        yield {
+            "type": "thinking",
+            "step": "routed",
+            "stocks": stocks,
+            "sectors": sectors,
+            "news": news,
+            "funds": funds,
+            "reasoning": routing_decision.get("reasoning", ""),
+        }
+
+        # Add portfolio analytics if a portfolio is selected
         if portfolio:
             market_insights = self.market.analyze_indices(data.get("market", {}))
             pnl = self.portfolio.compute_day_pnl(portfolio)
             alloc = self.portfolio.sector_allocation(portfolio)
             risk = self.portfolio.concentration_risk(alloc)
             portfolio_insights = {**pnl, "sector_allocation": alloc, "concentration_risk": risk}
-
             news_items = self.news.classify(data.get("news", {}))
             relevant_news = self.news.map_to_portfolio(news_items, portfolio)
-            
             data.update({
                 "portfolio": portfolio,
                 "market_insights": market_insights,
@@ -70,21 +83,28 @@ class AdvisorAgent:
                 "relevant_news": relevant_news,
             })
 
-        # Step 2: Extract only requested data (minimal context)
+        # Step 2: Extract — pull only the relevant slices from the dataset
+        yield {"type": "thinking", "step": "extracting", "message": "Filtering relevant data…"}
         filtered_data_json = self.extractor.extract(routing_decision, data)
-        print(f"[Extractor] Filtered data size: {len(filtered_data_json)} chars")
+        filtered_kb = round(len(filtered_data_json) / 1024, 1)
+        print(f"[Extractor] Filtered data size: {len(filtered_data_json)} chars ({filtered_kb} KB)")
+        yield {
+            "type": "thinking",
+            "step": "extracted",
+            "filtered_chars": len(filtered_data_json),
+            "filtered_kb": filtered_kb,
+        }
 
-        # Step 3: Build prompt with filtered data for reasoning
+        # Step 3: Reason — full model streams the answer using only filtered context
+        yield {"type": "thinking", "step": "reasoning", "model": self.groq.model}
+
         history = await self.conversation.load(session_id)
         await self.conversation.append(session_id, "user", query)
-        
-        # Create reasoner prompt with minimal context
         reasoner_prompt = self._build_reasoner_prompt(
             query=query,
             filtered_data=filtered_data_json,
             history=history,
         )
-        
         messages = [
             {"role": "system", "content": reasoner_prompt["system"]},
             *reasoner_prompt["history"],
@@ -95,7 +115,7 @@ class AdvisorAgent:
         full = ""
         async for token in stream_iter:
             full += token
-            yield token
+            yield {"type": "token", "content": token}
         await self.conversation.append(session_id, "assistant", full)
 
     async def answer(self, *, session_id: str, query: str, portfolio_id: str | None) -> str:
@@ -103,37 +123,84 @@ class AdvisorAgent:
 
         This reuses the streaming implementation and aggregates tokens.
         """
+        print(f"\n[Agent.answer] Starting for session={session_id}, portfolio={portfolio_id}")
+        print(f"[Agent.answer] Query: {query[:100]}...")
+        
         full = ""
-        async for token in self.stream_answer(
-            session_id=session_id, query=query, portfolio_id=portfolio_id
-        ):
-            full += token
-        return full
+        token_count = 0
+        try:
+            async for event in self.stream_answer(
+                session_id=session_id, query=query, portfolio_id=portfolio_id
+            ):
+                if event.get("type") == "token":
+                    full += event["content"]
+                    token_count += 1
+                    if token_count % 50 == 0:
+                        print(f"[Agent.answer] Received {token_count} tokens so far...")
+        except Exception as e:
+            print(f"[Agent.answer] ERROR during streaming: {type(e).__name__}: {str(e)}")
+            raise
+        
+        print(f"[Agent.answer] Streaming complete. Total tokens: {token_count}, chars: {len(full)}")
+
+        def _format_advisor_response(text: str) -> str:
+            import re
+
+            out = text
+            # Collapse runs of 3+ blank lines into 2 (preserve paragraph breaks)
+            out = re.sub(r"\n{3,}", "\n\n", out)
+            # Remove trailing spaces on each line
+            out = re.sub(r" +\n", "\n", out)
+            return out.strip()
+
+        formatted = _format_advisor_response(full)
+        await self.conversation.append(session_id, "assistant", formatted)
+        return formatted
 
     def _build_reasoner_prompt(self, query: str, filtered_data: str, history: list) -> dict:
-        """Build prompt for reasoner (full model) with minimal context."""
-        system_prompt = """You are an expert financial advisor with deep knowledge of Indian markets, stocks, mutual funds, and portfolio analysis.
+        system_prompt = """You are a financial advisor analyzing Indian markets and portfolios.
 
-Your role is to explain portfolio movements and market events through a causal chain:
-Market News → Sector Impact → Stock Movement → Portfolio Impact
+IMPORTANT FORMATTING RULES:
+1. Always use proper Markdown headers: ## for sections, ### for sub-sections.
+2. Use bullet points (- item) for lists.
+3. Use numbered lists (1. item) for recommendations.
+4. Write human-readable stock and fund names — never abbreviated or split names.
+   - Write "HDFC Bank" not "HDF CB ANK" or "HDFCBANK"
+   - Write "TCS" not "T CS"
+   - Write "Infosys" not "INF Y"
+   - Write "Information Technology" not "INFORMATION_TECHNOLOGY"
+   - Write "Diversified Mutual Fund" not "DIVERSIFIED_MF"
+5. Never write sector codes — translate to plain English (e.g., FLEXICAP → Flexi Cap).
 
-Rules:
-1. Always explain WHY, not just WHAT
-2. Use the filtered data provided to support your analysis
-3. Reference specific stocks, sectors, and holdings
-4. Explain the causal chain clearly
-5. If data is missing, acknowledge it
-6. Be concise but thorough
+Respond strictly in this structure:
 
-Format answers as:
-- Key insights first
-- Supporting causal chain
-- Specific recommendations if applicable"""
+## Key Insights
+- Insight 1
+- Insight 2
+- Insight 3
+
+## Causal Chain
+**Market News → Sector Impact → Stock → Portfolio**
+- Market news: ...
+- Sector impact: ...
+- Stock impact: ...
+- Portfolio impact: ...
+
+## Holdings Mentioned
+- Stock/fund name (Sector): brief note
+
+## Recommendations
+1. Recommendation 1
+2. Recommendation 2
+3. Recommendation 3
+
+Be concise, specific, and actionable."""
 
         history_formatted = []
         for msg in history:
             if msg.get("role") in ["user", "assistant"]:
                 history_formatted.append(msg)
+
 
         user_prompt = f"""Data Context (filtered for this query):
 {filtered_data}

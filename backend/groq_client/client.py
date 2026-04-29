@@ -16,15 +16,25 @@ class GroqClient:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=4), reraise=True)
     async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
+        print(f"[GroqClient.stream_chat] Calling Groq API (model={self.model})")
+        print(f"[GroqClient.stream_chat] Messages: {len(messages)} (user last: {messages[-1].get('content', '')[:50]}...)")
+        
         if not self.api_key:
+            print("[GroqClient.stream_chat] WARNING: No API key configured, using fallback")
             async def _fallback() -> AsyncIterator[str]:
                 yield "Groq is not configured (missing GROQ_API_KEY). Running in local fallback mode."
             return _fallback()
 
-        return stream_openai_compatible(
-            api_key=self.api_key,
-            model=self.model,
-            messages=messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-        )
+        try:
+            result = stream_openai_compatible(
+                api_key=self.api_key,
+                model=self.model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+            print("[GroqClient.stream_chat] Stream opened successfully")
+            return result
+        except Exception as e:
+            print(f"[GroqClient.stream_chat] Error: {type(e).__name__}: {str(e)}")
+            raise

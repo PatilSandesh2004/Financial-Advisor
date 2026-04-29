@@ -6,9 +6,9 @@ Uses cheaper/faster model (llama-3.1-8b) to determine what data is needed.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+import re
 
-from groq import Groq
+from groq import AsyncGroq
 
 
 ROUTER_PROMPT = """You are a data router for a financial advisor system.
@@ -33,10 +33,7 @@ Available field types for stocks:
 
 Respond ONLY with valid JSON like:
 {
-  "funds": {
-    "ids": ["MF001", "MF002"],
-    "fields": ["basic", "returns"]
-  },
+  "funds": {"ids": ["MF001", "MF002"], "fields": ["basic", "returns"]},
   "stocks": ["HDFCBANK", "INFY"],
   "sectors": ["BANKING", "IT"],
   "market": ["indices", "breadth"],
@@ -51,53 +48,38 @@ class DataRouter:
     def __init__(self, api_key: str | None, router_model: str = "llama-3.1-8b-instant"):
         self.api_key = api_key
         self.router_model = router_model
-        self.client = Groq(api_key=api_key) if api_key else None
+        self.client = AsyncGroq(api_key=api_key) if api_key else None
 
     async def route_query(self, query: str) -> dict:
-        """
-        Call router LLM to determine what data is needed for the query.
-        Returns structured routing decision as JSON.
-        """
         if not self.client:
             return self._default_routing()
-
         try:
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.router_model,
                 messages=[
                     {"role": "system", "content": ROUTER_PROMPT},
                     {"role": "user", "content": query},
                 ],
-                temperature=0.1,  # Deterministic
-                max_tokens=500,
+                temperature=0.1,
+                max_tokens=300,
             )
-            
             content = response.choices[0].message.content.strip()
-            
-            # Extract JSON from response
             try:
-                routing = json.loads(content)
+                return json.loads(content)
             except json.JSONDecodeError:
-                # Try to extract JSON if there's extra text
-                import re
-                json_match = re.search(r"\{.*\}", content, re.DOTALL)
-                if json_match:
-                    routing = json.loads(json_match.group())
-                else:
-                    routing = self._default_routing()
-            
-            return routing
+                match = re.search(r"\{.*\}", content, re.DOTALL)
+                if match:
+                    return json.loads(match.group())
+                return self._default_routing()
         except Exception as e:
             print(f"Router error: {e}")
             return self._default_routing()
 
     def _default_routing(self) -> dict:
-        """Fallback routing when API fails or not configured."""
         return {
-            "funds": {"ids": [], "fields": []},
-            "stocks": [],
-            "sectors": [],
-            "market": ["indices"],
+            "funds": {"ids": [], "fields": ["basic", "returns"]},
+            "stocks": ["HDFCBANK", "TCS", "INFY", "RELIANCE"],
+            "sectors": ["BANKING", "IT", "ENERGY"],
+            "market": ["indices", "breadth"],
             "news": ["all"],
-            "reasoning": "fallback routing - API not available"
         }
