@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
-from backend.observability.tracing import capture_exception, start_span
 
 
 SYSTEM_PROMPT = (
@@ -65,69 +63,15 @@ SYSTEM_PROMPT = (
 # """
 
 class PromptBuilder:
-    def build(self, *, query: str, context: dict, history: list[dict], trace=None) -> list[dict]:
-        span = start_span(
-            trace,
-            "prompt-builder",
-            user_query=query,
-            history_turn_count=len(history),
-            context_keys=list(context.keys()),
+    def build(self, *, query: str, context: dict, history: list[dict]) -> list[dict]:
+        context_block = json.dumps(context, ensure_ascii=False)[:12000]
+        messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if history:
+            messages.extend(history)
+        messages.append(
+            {
+                "role": "user",
+                "content": f"CONTEXT:\n{context_block}\n\nUSER_QUERY:\n{query}",
+            }
         )
-        start = time.perf_counter()
-        try:
-            print(f"\n[PROMPT BUILDER] 🔨 Building prompt for reasoning model...")
-            print(f"[PROMPT BUILDER]   User Query: {query}")
-            print(f"[PROMPT BUILDER]   Context Available: {list(context.keys())}")
-            print(f"[PROMPT BUILDER]   Conversation History: {len(history)} previous messages")
-            
-            context_block = json.dumps(context, ensure_ascii=False)[:12000]
-            messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-            
-            print(f"\n[PROMPT BUILDER] 📋 SYSTEM MESSAGE:")
-            print(f"─" * 80)
-            print(f"{SYSTEM_PROMPT}")
-            print(f"─" * 80)
-            
-            if history:
-                print(f"\n[PROMPT BUILDER] 📚 CONVERSATION HISTORY ({len(history)} messages):")
-                for i, msg in enumerate(history, 1):
-                    role = msg.get("role", "unknown").upper()
-                    content = msg.get("content", "")[:100]
-                    print(f"  {i}. [{role}] {content}...")
-                messages.extend(history)
-            
-            print(f"\n[PROMPT BUILDER] 🔍 CONTEXT DATA (for reasoning):")
-            print(f"─" * 80)
-            print(f"Context size: {len(context_block)} characters")
-            print(f"Content preview:\n{context_block[:500]}...")
-            print(f"─" * 80)
-            
-            user_message_content = f"CONTEXT:\\n{context_block}\\n\\nUSER_QUERY:\\n{query}"
-            messages.append(
-                {
-                    "role": "user",
-                    "content": user_message_content,
-                }
-            )
-            
-            print(f"\n[PROMPT BUILDER] 👤 FINAL USER MESSAGE:")
-            print(f"─" * 80)
-            print(f"{user_message_content[:800]}...")
-            print(f"─" * 80)
-            
-            prompt_size = sum(len(m.get("content", "")) for m in messages)
-            print(f"\n[PROMPT BUILDER] ✅ PROMPT COMPLETE:")
-            print(f"  - Total messages: {len(messages)}")
-            print(f"  - Total size: {prompt_size} characters")
-            print(f"  - Messages breakdown: 1 system + {len(history)} history + 1 user")
-            
-            span.set_metadata(prompt_size=prompt_size)
-            span.set_metadata(final_reasoning_prompt=messages[-1]["content"])
-            return messages
-        except Exception as exc:
-            capture_exception(trace, exc, stage="prompt-builder")
-            raise
-        finally:
-            duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            span.set_metadata(duration_ms=duration_ms)
-            span.end()
+        return messages

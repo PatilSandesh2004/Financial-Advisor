@@ -180,6 +180,28 @@ def render_sidebar() -> None:
 
         st.divider()
 
+        # Model settings (safe fields only — no API keys)
+        with st.expander("⚙️ Model Settings"):
+            st.caption("These settings are sent to the server. Your API key is never exposed.")
+            model = st.selectbox(
+                "Model",
+                ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant"],
+                index=0,
+                key="setting_model",
+            )
+            temperature = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05, key="setting_temp")
+            max_tokens = st.select_slider(
+                "Max tokens",
+                options=[256, 512, 768, 1024, 1536, 2048],
+                value=512,
+                key="setting_maxtok",
+            )
+            st.session_state.user_settings = {
+                "groq_model": model,
+                "groq_temperature": temperature,
+                "groq_max_tokens": max_tokens,
+            }
+
 
 # ── Main chat area ────────────────────────────────────────────────────────────
 
@@ -224,18 +246,6 @@ def handle_input() -> None:
         st.markdown(prompt)
 
     # Stream assistant response
-    def _chunk_text(chunk: dict | str) -> str:
-        if isinstance(chunk, dict):
-            chunk_type = chunk.get("type")
-            if chunk_type == "token":
-                return str(chunk.get("content", ""))
-            if chunk_type == "thinking":
-                return ""
-            if chunk_type == "error":
-                raise RuntimeError(chunk.get("content", "Unknown error"))
-            return str(chunk.get("content", ""))
-        return str(chunk)
-
     with st.chat_message("assistant"):
         placeholder = st.empty()
         placeholder.markdown("_Thinking…_")
@@ -245,11 +255,10 @@ def handle_input() -> None:
                 session_id=session_id,
                 message=prompt,
                 portfolio_id=portfolio_id,
+                settings=st.session_state.get("user_settings"),
             ):
-                content = _chunk_text(chunk)
-                if content:
-                    accumulated += content
-                    placeholder.markdown(accumulated + "▌")
+                accumulated += chunk
+                placeholder.markdown(accumulated + "▌")
             placeholder.markdown(accumulated)
         except Exception as exc:
             accumulated = f"**Connection Error:** {exc}"

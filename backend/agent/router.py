@@ -7,10 +7,8 @@ from __future__ import annotations
 
 import json
 import re
-import time
 
 from groq import AsyncGroq
-from backend.observability.tracing import capture_exception, track_generation
 
 
 ROUTER_PROMPT = """You are a data router for a financial advisor system.
@@ -52,22 +50,10 @@ class DataRouter:
         self.router_model = router_model
         self.client = AsyncGroq(api_key=api_key) if api_key else None
 
-    async def route_query(self, query: str, trace=None) -> dict:
+    async def route_query(self, query: str) -> dict:
         if not self.client:
             return self._default_routing()
-
-        generation = track_generation(
-            trace,
-            "intent-router",
-            raw_user_query=query,
-            router_prompt=ROUTER_PROMPT[:2000],
-            router_model=self.router_model,
-            streamed=False,
-        )
-        start = time.perf_counter()
         try:
-            print(f"[ROUTER] 📡 Calling Groq router model: {self.router_model}")
-            print(f"[ROUTER]   User query: {query[:100]}...")
             response = await self.client.chat.completions.create(
                 model=self.router_model,
                 messages=[
@@ -78,61 +64,16 @@ class DataRouter:
                 max_tokens=300,
             )
             content = response.choices[0].message.content.strip()
-            print(f"[ROUTER] 📨 Router response received:")
-            print(f"[ROUTER]   Raw response: {content[:200]}...")
             try:
-                parsed = json.loads(content)
-            except json.JSONDecodeError as parse_exc:
+                return json.loads(content)
+            except json.JSONDecodeError:
                 match = re.search(r"\{.*\}", content, re.DOTALL)
                 if match:
-                    parsed = json.loads(match.group())
-                else:
-                    capture_exception(
-                        trace,
-                        parse_exc,
-                        stage="intent-router",
-                        raw_output=content,
-                        parse_error=str(parse_exc),
-                    )
-                    generation.set_metadata(parse_error=str(parse_exc), raw_output=content)
-                    raise
-
-            generation.set_metadata(
-                raw_output=content,
-                parsed_output=parsed,
-                predicted_intent=parsed.get("intent"),
-                requested_portfolios=parsed.get("portfolios"),
-                requested_stocks=parsed.get("stocks"),
-                requested_sectors=parsed.get("sectors"),
-                requested_market_blocks=parsed.get("market"),
-                requested_news_scope=parsed.get("news"),
-                router_reasoning=parsed.get("reasoning"),
-            )
-            
-            print(f"\n[ROUTER] 📋 ROUTING DECISION (JSON):")
-            print(f"─" * 80)
-            print(json.dumps(parsed, indent=2))
-            print(f"─" * 80)
-            
-            print(f"\n[ROUTER] ✅ Routing decision breakdown:")
-            print(f"  - Funds: {parsed.get('funds', {}).get('ids', [])} (fields: {parsed.get('funds', {}).get('fields', [])})")
-            print(f"  - Stocks: {parsed.get('stocks', [])}")
-            print(f"  - Sectors: {parsed.get('sectors', [])}")
-            print(f"  - Market: {parsed.get('market', [])}")
-            print(f"  - News: {parsed.get('news', [])}")
-            print(f"  - Reasoning: {parsed.get('reasoning', 'N/A')}")
-            
-            return parsed
+                    return json.loads(match.group())
+                return self._default_routing()
         except Exception as e:
-            capture_exception(trace, e, stage="intent-router")
-            generation.set_metadata(error=str(e))
-            generation.end(status="failed")
             print(f"Router error: {e}")
             return self._default_routing()
-        finally:
-            duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            generation.set_metadata(latency_ms=duration_ms)
-            generation.end()
 
     def _default_routing(self) -> dict:
         return {

@@ -50,6 +50,7 @@ def stream_chat(
     session_id: str,
     message: str,
     portfolio_id: str | None,
+    settings: dict | None = None,
 ) -> Iterable[dict]:
     """Stream assistant events from the SSE endpoint.
 
@@ -57,18 +58,28 @@ def stream_chat(
       {"type": "thinking", "step": ..., ...}  — intermediate reasoning steps
       {"type": "token",    "content": str}     — response tokens
       {"type": "error",    "content": str}     — error message
+
+    ``settings`` may contain safe inference overrides: model, temperature, max_tokens.
+    API keys are never sent from the frontend.
     """
     payload: dict = {
         "session_id": session_id,
         "message": message,
         "portfolio_id": portfolio_id,
     }
+    if settings:
+        safe = {
+            k: v for k, v in settings.items()
+            if k in ("groq_model", "groq_temperature", "groq_max_tokens")
+        }
+        if safe:
+            payload["settings"] = safe
 
     headers = {"Accept": "text/event-stream", "Content-Type": "application/json"}
     try:
         with httpx.Client(timeout=None) as client:
             with client.stream(
-                "POST", f"{API_BASE_URL}/api/v1/chat", json=payload, headers=headers
+                "POST", f"{API_BASE_URL}/api/v1/chat/stream", json=payload, headers=headers
             ) as resp:
                 resp.raise_for_status()
                 current_event = None
