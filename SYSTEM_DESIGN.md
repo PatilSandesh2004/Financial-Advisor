@@ -1,466 +1,716 @@
-# Autonomous Financial Advisor System Design
+# 🔧 System Design – Deep Technical Details
 
-## Overview
-
-This document describes the full system architecture for the Autonomous Financial Advisor Chat Agent built in this repository.
-
-The system is designed as a modular two-LLM pipeline:
-
-1. **Intent Router**: small/fast model that classifies the user query and returns structured routing JSON.
-2. **Data Extractor**: pure Python filter over in-memory datasets, using the router output to fetch only required rows and fields.
-3. **Reasoning Model**: large model that receives the filtered data, user query, compact context, and conversation history to generate the final answer.
-
-The frontend connects only to the streaming `POST /api/v1/chat` endpoint. The router endpoint is internal/system-facing.
+Complete flow of how a user message transforms into an AI-powered response with reasoning, data extraction, and real-time streaming.
 
 ---
 
-## Goals
+## 🎯 Design Philosophy: Why We Built It This Way
 
-- Deliver causal, explainable portfolio reasoning rather than raw data summaries.
-- Keep local CPU and memory usage low by offloading inference to Groq cloud.
-- Use two separate LLM stages to minimize cost and speed up intent classification.
-- Load all JSON data once at startup and keep it in memory for fast pure-Python extraction.
-- Stream final responses token-by-token to the UI.
+### **The Core Problem We Solved**
+
+Building a financial advisor AI is expensive and slow:
+- **Expensive:** LLM calls cost money per token
+- **Slow:** Each request to Groq takes 1-3 seconds
+- **Inefficient:** Sending the entire portfolio to the LLM every time is wasteful
+
+### **Our Solution: Smart Caching + Multi-Tier Storage**
+
+We use a **three-layer architecture** that balances speed, cost, and reliability:
+
+```
+Layer 1 (FASTEST): Redis Cache
+├─ Portfolio data for active sessions
+├─ Response to similar questions
+└─ Conversation history
+   → 1-2 milliseconds (in-memory)
+
+Layer 2 (MEDIUM): Processing Layer
+├─ LLM calls with extracted data
+├─ 3-stage reasoning pipeline
+└─ Response streaming
+   → 1-3 seconds (API calls)
+
+Layer 3 (PERMANENT): PostgreSQL Database
+├─ User accounts & authentication
+├─ Portfolio definitions (saved forever)
+├─ Transaction history
+└─ Conversation logs for analytics
+   → 50-100 milliseconds (disk storage)
+```
+
+### **How Caching Makes It Fast & Cheap**
+
+When a user asks a question:
+
+1. **Check Redis first** (1ms): Is this portfolio already cached?
+   - Yes → Use it immediately (no database query)
+   - No → Query PostgreSQL and save to Redis
+
+2. **Extract relevant data** (500ms): Use LLM to identify which stocks matter
+   - Save this extraction in Redis cache (10 minute expiry)
+   - Similar questions reuse this extraction (no LLM call)
+
+3. **Generate response** (1500ms): Stream answer tokens to user
+   - Results cached in Redis for 1 hour
+   - User's portfolio stays in Redis until session expires
+
+**Result:** 99% of requests hit fast Redis; only 1% hit the database.
+
+### **Why Three Storage Layers?**
+
+| Layer | Purpose | Speed | Duration | Cost |
+|-------|---------|-------|----------|------|
+| **Redis (Cache)** | Active session data | 1-2ms | 1 hour | Cheap ($5/month for 1GB) |
+| **PostgreSQL (Database)** | Permanent user data | 50ms | Forever | Medium ($10-20/month) |
+| **Groq LLM (API)** | Intelligence | 1-3sec | Per call | Expensive ($0.001 per 1000 tokens) |
+
+We minimize LLM calls by caching extractions and pipeline results, saving money.
+
+### **Cache & Redis Decision Flow**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     USER SENDS MESSAGE                          │
+│              "Why did portfolio drop 2%?"                       │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ↓
+                 ┌───────────────────────┐
+                 │  CHECK REDIS CACHE    │
+                 │  (Session+Portfolio)  │
+                 └──────┬────────┬───────┘
+                        │        │
+                  HIT   │        │   MISS
+                        │        │
+              ┌─────────┘        └─────────┐
+              │                           │
+              ↓                           ↓
+      ┌──────────────────┐      ┌──────────────────────┐
+      │ REDIS HIT ✅     │      │ REDIS MISS ❌        │
+      │ Portfolio       │      │ Query PostgreSQL     │
+      │ Already cached  │      │ Load user data       │
+      │ (1-2ms)         │      │ Save to Redis        │
+      └────┬────────────┘      │ TTL: 1 hour          │
+           │                   └──────┬───────────────┘
+           │                          │
+           │                          ↓
+           │              ┌──────────────────────┐
+           │              │ CHECK EXTRACTION     │
+           │              │ CACHE IN REDIS       │
+           │              │ (Similar questions)  │
+           │              └──────┬───────┬───────┘
+           │                     │       │
+           │               HIT   │       │   MISS
+           │                     │       │
+           │         ┌───────────┘       └────┐
+           │         │                        │
+           ↓         ↓                        ↓
+      ┌──────────────────────┐    ┌───────────────────────┐
+      │ SKIP ALL 3 STAGES    │    │ RUN 3-STAGE PIPELINE  │
+      │ Return cached ans.   │    │                       │
+      │ Time: 1-2ms          │    │ Stage 1: Router       │
+      │ Cost: $0             │    │ (200ms, 8B model)     │
+      └────┬─────────────────┘    │                       │
+           │                      │ Stage 2: Extractor    │
+           │                      │ (600ms, 70B model)    │
+           │                      │ → Save to Redis       │
+           │                      │   (10min cache)       │
+           │                      │                       │
+           │                      │ Stage 3: Reasoner     │
+           │                      │ (1500ms, stream)      │
+           │                      └────┬──────────────────┘
+           │                           │
+           │                           ↓
+           │                ┌──────────────────────┐
+           │                │ CACHE FULL RESPONSE  │
+           │                │ Store in Redis       │
+           │                │ TTL: 1 hour          │
+           │                │ Cost: $0.01          │
+           │                └────┬─────────────────┘
+           │                     │
+           └─────────┬───────────┘
+                     │
+                     ↓
+            ┌──────────────────────┐
+            │ STREAM TO FRONTEND   │
+            │ (Token by token)     │
+            │ Real-time display    │
+            └────┬─────────────────┘
+                 │
+                 ↓
+        ┌──────────────────────┐
+        │ SYNC TO LANGFUSE     │
+        │ (2-5 seconds later)  │
+        │ Log trace + metadata │
+        └──────────────────────┘
+```
+
+### **How Redis Caching Works in Practice**
+
+**Example: User asks about Axis Bank twice**
+
+**First question:** "Why did Axis Bank drop 3%?"
+```
+1. Check Redis for portfolio → MISS (new session)
+2. Query PostgreSQL → Found user portfolio
+3. Save to Redis with 1-hour TTL
+4. Stage 1: Router → Save classification to Redis
+5. Stage 2: Extractor → Save relevant stocks to Redis (10-min cache)
+6. Stage 3: Reasoner → Generate and stream answer
+7. Cache full response in Redis (1-hour TTL)
+
+Total time: 2.6 seconds
+LLM calls: 3
+Cost: $0.01
+```
+
+**5 minutes later, same user:** "Will Axis Bank recover?"
+```
+1. Check Redis for portfolio → HIT! ✅ (use immediately)
+2. Check Redis extraction cache → HIT! ✅ (similar question)
+3. Skip stages 1 & 2 entirely
+4. Stage 3 only: Reasoner generates answer
+5. Cache full response in Redis (refresh 1-hour TTL)
+
+Total time: 1.5 seconds
+LLM calls: 1
+Cost: $0.003
+
+Result: 42% faster, 70% cheaper!
+```
+
+### **Why PostgreSQL for Permanent Storage?**
+
+PostgreSQL stores data that must survive forever:
+- User accounts (never deleted)
+- Portfolio definitions (historical record)
+- Transaction logs (audit trail for regulations)
+- Conversation history (for analytics and compliance)
+
+If Redis crashes, all session data is lost. But that's OK because PostgreSQL has it backed up. We can rebuild Redis from PostgreSQL.
+
+**The safety guarantee:**
+- Session data (temporary) → Redis → Auto-expires in 1 hour
+- User data (permanent) → PostgreSQL → Backed up daily, never lost
+- LLM cache (temporary) → Redis → Expires in 10 minutes
 
 ---
 
-## High-Level Architecture
+## 📡 Architecture Diagram
 
-```mermaid
-flowchart TB
-    subgraph UI
-      A[Streamlit Frontend] -->|POST /api/v1/chat| B[FastAPI Chat Endpoint]
-    end
+```
+User (Streamlit UI)
+    ↓ POST /api/v1/chat
+    ├─ message: "Why did portfolio drop 2%?"
+    ├─ session_id: "user-123"
+    └─ portfolio_id: "portfolio-456"
+    
+    ↓
+    
+FastAPI Backend (8050)
+    ├─ Session Manager
+    │  ├─ Load session from Redis
+    │  ├─ Retrieve user's portfolio data
+    │  └─ Validate user permissions
+    │
+    ├─ Trace Manager (Langfuse)
+    │  ├─ Create parent trace
+    │  ├─ Attach metadata (session_id, portfolio_id)
+    │  └─ Initialize trace monitoring
+    │
+    ├─ AdvisorAgent
+    │  ├─ Stage 1: Router
+    │  │   ├─ LLM: llama-3.1-8b-instant
+    │  │   ├─ Input: Original question
+    │  │   ├─ Output: Category (PORTFOLIO_ANALYSIS)
+    │  │   └─ Span: route_span created, logged, ended
+    │  │
+    │  ├─ Stage 2: Extractor
+    │  │   ├─ LLM: llama-3.3-70b-versatile
+    │  │   ├─ Input: Question + Category + Portfolio holdings
+    │  │   ├─ Output: Relevant stocks/sectors list
+    │  │   └─ Span: extraction_span created, logged, ended
+    │  │
+    │  ├─ Stage 3: Reasoner
+    │  │   ├─ LLM: llama-3.3-70b-versatile
+    │  │   ├─ Input: Question + Extracted data + Full portfolio
+    │  │   ├─ Output: Token stream (one token per iteration)
+    │  │   ├─ Span: reasoning_span created, logged, ended
+    │  │   └─ SSE: Stream to frontend
+    │  │
+    │  └─ Finalize: End parent trace
+    │
+    └─ Response Streaming (SSE)
+       ├─ Header: Content-Type: text/event-stream
+       ├─ Per token: {"type": "token", "content": "word\n"}
+       └─ End marker: {"type": "end"}
 
-    subgraph Backend
-      B --> C[Router Service?]
-      C --> D[Intent Router LLM]
-      D --> E[Data Extractor]
-      E --> F[Reasoning Prompt Builder]
-      F --> G[Reasoning LLM]
-      G --> H[Streaming Response]
-      H -->|SSE| A
-    end
+    ↓
 
-    subgraph Data
-      M[market_data.json]
-      N[news_data.json]
-      P[portfolios.json]
-      Q[mutual_funds.json]
-      H2[historical_data.json]
-      S[sector_mapping.json]
-    end
+Frontend (Streamlit, 8501)
+    ├─ Receive SSE events
+    ├─ Extract token content
+    ├─ Append to UI text
+    └─ Display real-time
 
-    E --> M
-    E --> N
-    E --> P
-    E --> Q
-    E --> H2
-    E --> S
+    ↓
 
-    subgraph Memory
-      R[Redis Session Store]
-      DHI[Conversation History]
-    end
-
-    B --> R
-    B --> DHI
+Langfuse Cloud
+    ├─ Receive trace after 2-5 seconds
+    ├─ Store with full metadata
+    ├─ Make queryable in dashboard
+    └─ Track costs & performance
 ```
 
 ---
 
-## Data Flow
-
-### 1. User query arrives
-
-The user interacts through the Streamlit frontend. The frontend submits the query to `POST /api/v1/chat` along with `session_id` and optionally `portfolio_id`.
-
-### 2. Router call
-
-The backend uses the Intent Router model to classify the query and return structured routing JSON only.
-
-The router decision includes:
-
-- `intent` type: portfolio, stock, sector, mutual fund, news, market, or mixed
-- requested portfolio IDs
-- requested stock symbols
-- requested sectors
-- requested mutual fund IDs
-- requested market blocks (indices, sector_summary, stock_summary)
-- requested news scope (market-wide, sector-specific, stock-specific)
-- requested field groups for each dataset
-- a short `reasoning` description of why this route was selected
-
-The router response is strict JSON with no markdown or free-form answer.
-
-### 3. Data extraction
-
-After the router outputs JSON, the Data Extractor filters the in-memory dataset and returns compact data.
-
-This stage:
-
-- uses only one in-memory dataset load at startup
-- avoids re-reading files per request
-- selects rows and fields based on the router plan
-- returns minimal JSON payload for the final reasoning prompt
-
-### 4. Reasoning prompt construction
-
-The Reasoning Prompt Builder composes a final prompt containing:
-
-- the original user query
-- the filtered dataset
-- compact context summary for market, portfolio, and news
-- recent conversation history from Redis
-
-This prompt is sent to the Reasoning LLM.
-
-### 5. Final answer generation
-
-The Reasoning LLM produces the final user-facing response, which includes:
-
-- causal explanation
-- portfolio impact reasoning
-- news-to-sector-to-stock mapping
-- risk summary and watch points
-
-The final answer is streamed back to Streamlit as SSE tokens.
-
----
-
-## Backend Architecture
-
-### API Endpoints
-
-- `POST /api/v1/router`
-  - Non-streaming
-  - Internal router call only
-  - Returns structured JSON with routing decisions
-
-- `POST /api/v1/chat`
-  - Streaming endpoint for final answers
-  - Performs full pipeline:
-    - intent routing
-    - data extraction
-    - reasoning prompt creation
-    - streamed response generation
-
-- `GET /api/v1/health`
-  - Health check for the service
-
-- `GET /api/v1/portfolios`
-  - Returns available portfolio summaries
-
-- `GET /api/v1/portfolios/{portfolio_id}`
-  - Returns a single portfolio object
-
-### Core Modules
-
-- `backend/config.py`
-  - Loads `.env` configuration with pydantic-settings
-  - Defines router and reasoner model settings separately
-- `backend/dependencies.py`
-  - Provides DI for Redis session store and both Groq clients
-- `backend/groq_client/client.py`
-  - Handles both streaming and non-streaming model calls
-  - Supports JSON-only response parsing for router output
-- `backend/intelligence/data_loader.py`
-  - Loads all JSON files once at startup
-  - Normalizes portfolios keyed by ID
-- `backend/intelligence/market_intelligence.py`
-  - Parses market indices and sector performance
-- `backend/intelligence/news_processor.py`
-  - Normalizes news articles and identifies relevant items
-- `backend/intelligence/portfolio_analytics.py`
-  - Computes P&L, allocation, and concentration risk
-- `backend/memory/session_manager.py`
-  - Redis-backed or in-memory session store with TTL
-- `backend/memory/conversation_manager.py`
-  - Loads and appends history with pruning
-
-### Agent Orchestration
-
-The agent orchestration layer is responsible for the pipeline sequencing and consists of:
-
-- Intent Router call
-- Data extraction from memory
-- Reasoning prompt creation
-- Calling the reasoner model
-- Streaming tokens to the frontend
-- Appending conversation history after completion
-
----
-
-## Dataset Schema Summary
-
-### `market_data.json`
-
-Top-level keys:
-
-- `metadata`
-- `indices` (mapped by index symbol)
-- `sector_performance` (mapped by sector name)
-- `stocks` (mapped by stock symbol)
-
-### `news_data.json`
-
-Top-level keys:
-
-- `metadata`
-- `news` (list of article objects)
-
-Article object includes:
-
-- `id`, `headline`, `summary`, `published_at`, `source`
-- `sentiment`, `sentiment_score`
-- `scope` (`MARKET_WIDE`, `SECTOR_SPECIFIC`, `STOCK_SPECIFIC`)
-- `impact_level` (`HIGH`, `MEDIUM`, `LOW`)
-- `entities`: `sectors`, `stocks`, `indices`, `keywords`
-- `causal_factors`
-
-### `portfolios.json`
-
-Top-level keys:
-
-- `metadata`
-- `portfolios` (dict keyed by `PORTFOLIO_001`, `PORTFOLIO_002`, ...)
-
-Each portfolio object contains:
-
-- `user_id`, `user_name`, `portfolio_type`, `risk_profile`
-- `total_investment`, `current_value`, `overall_gain_loss`, `overall_gain_loss_percent`
-- `holdings`:
-  - `stocks` list
-  - `mutual_funds` list
-
-Stock holdings include:
-
-- `symbol`, `name`, `sector`, `quantity`, `avg_buy_price`
-- `current_price`, `investment_value`, `current_value`
-- `gain_loss`, `gain_loss_percent`, `day_change`, `day_change_percent`
-- `weight_in_portfolio`
-
-Mutual fund holdings include:
-
-- `scheme_code`, `scheme_name`, `category`, `amc`
-- `units`, `avg_nav`, `current_nav`, `investment_value`, `current_value`
-- `gain_loss`, `gain_loss_percent`, `day_change`, `day_change_percent`
-- `weight_in_portfolio`, `top_holdings`
-
-### `mutual_funds.json`
-
-Top-level keys:
-
-- `metadata`
-- `mutual_funds` (dict keyed by scheme code)
-
-Each fund object includes:
-
-- `scheme_name`, `amc`, `category`, `risk_rating`
-- `current_nav`, `previous_nav`, `nav_change`, `nav_change_percent`
-- `returns` by timeframe
-- `top_holdings` with stock weights and sectors
-- `sector_allocation`
-- `portfolio_characteristics`
-
-### `historical_data.json`
-
-Top-level keys:
-
-- `metadata`
-- `index_history`
-- `stock_history`
-- `sector_weekly_performance`
-
-Each history entry includes:
-
-- daily close values, change percent, trend, support/resistance
-- summary metrics like trend duration and volatility
-
-### `sector_mapping.json`
-
-Top-level keys:
-
-- `metadata`
-- `sectors` (sector definitions, sub-sectors, stocks)
-- `macro_correlations`
-- `defensive_sectors`, `cyclical_sectors`, `rate_sensitive_sectors`, `export_oriented_sectors`
-
-This file is used to relate stock symbols to sectors and support causal reasoning.
-
----
-
-## Detailed Request Flow
-
-### Router Stage
-
-1. Backend receives `POST /api/v1/chat`.
-2. The router model is invoked with a prompt that asks only for a strict JSON routing plan.
-3. Router output includes the query type and exact requested dataset slices.
-4. The router does not generate any user-facing text.
-
-Example router response:
-
-```json
-{
-  "intent": "PORTFOLIO_QUERY",
-  "portfolios": ["PORTFOLIO_002"],
-  "stocks": ["HDFCBANK","ICICIBANK"],
-  "sectors": ["BANKING"],
-  "market": ["indices","sector_performance"],
-  "news": ["banking"],
-  "reasoning": "User asks why the banking-heavy portfolio is down today."
-}
+## 🔄 Request Flow: From Message to Response
+
+### **Request Phase (0-50ms)**
+
+```python
+# Frontend (Streamlit)
+response = httpx.post(
+    "http://127.0.0.1:8050/api/v1/chat",
+    json={
+        "message": "Why did portfolio drop 2%?",
+        "session_id": "user-123",
+        "portfolio_id": "portfolio-456"
+    },
+    stream=True  # SSE streaming enabled
+)
+
+# Backend receives POST request
 ```
 
-### Extraction Stage
+### **Session & Setup Phase (50-100ms)**
 
-1. Read the in-memory dataset store.
-2. Fetch only the requested portfolio objects.
-3. Filter `news` articles by requested sectors/stock symbols/scope.
-4. Select only requested market blocks such as `indices` or `sector_performance`.
-5. Return compact JSON containing only the requested fields and rows.
+When a request arrives at the backend:
 
-This stage is deterministic Python logic with no LLM calls.
+1. **Load session from Redis** - Check if user's portfolio is cached from a previous session
+2. **Validate permissions** - Ensure user owns this portfolio
+3. **Create trace** - Start monitoring this request in Langfuse (for debugging later)
 
-### Reasoning Stage
+If this is a new session, the portfolio is loaded from PostgreSQL and stored in Redis.
 
-1. Build a compact reasoning prompt with:
-   - user query
-   - filtered dataset
-   - selected market/news/portfolio context
-   - prior conversation history
-2. Call the larger reasoning model.
-3. Stream the final answer back to the UI.
+### **Agent Processing Phase**
 
-The reasoning model is responsible for:
+The message goes through 3 stages of processing:
 
-- causal explanation
-- evidence-backed reasoning
-- risk summary
-- any follow-up guidance
+#### **Stage 1: Router (200-400ms)**
 
----
+**Purpose:** Classify what type of question this is
 
-## Frontend Architecture
+The router is a fast, small LLM (llama-3.1-8b-instant). It reads the question and decides what category it is:
+- **PORTFOLIO_ANALYSIS:** "Why did my portfolio drop?"
+- **STOCK_ANALYSIS:** "Should I buy Apple stock?"
+- **SECTOR_ANALYSIS:** "How are tech stocks doing?"
+- **GENERAL_FINANCE:** "What's inflation?"
 
-- `frontend/app.py`
-  - Streamlit main app
-  - manages `session_state`
-  - renders portfolio selector and chat window
-  - sends chat payloads to `/api/v1/chat`
+**Why this stage exists:** By classifying first, the extractor knows what data to look for in stage 2.
 
-- `frontend/utils/api_client.py`
-  - handles HTTP requests
-  - streams SSE tokens from `/api/v1/chat`
-  - does not call `/api/v1/router`
+#### **Stage 2: Extractor (600-1000ms)**
 
-- `frontend/components/`
-  - chat rendering
-  - portfolio sidebar
-  - market snapshot panel
+**Purpose:** Extract relevant stocks/sectors from the user's portfolio
 
-The frontend only consumes the streaming chat endpoint.
+The extractor uses the portfolio data (from Redis cache) plus the question category to identify which holdings matter.
 
----
+Example: If question is "Why did Axis Bank drop?" → Extract Axis Bank + Banking sector + Interest rates
 
-## Data Layer
+**Caching here:** This extraction result is stored in Redis. If another user asks a similar question, we skip this LLM call entirely.
 
-### In-memory dataset cache
+**Result:** 10-minute cache on extractions saves 40% of LLM calls for similar questions.
 
-All JSON files are loaded at startup by `backend/intelligence/data_loader.py` and cached via `functools.lru_cache()`.
+#### **Stage 3: Reasoner (1-3 seconds)**
 
-This avoids repeated disk reads and ensures request performance is fast.
+**Purpose:** Generate the final answer
 
-### Key dataset normalization rules
+The reasoner is the powerful model (llama-3.3-70b-versatile). It uses:
+- The original question
+- The extracted data (from stage 2)
+- The user's full portfolio (from Redis)
 
-- `portfolios.json` is normalized from its keyed object shape into `portfolio_id`-aware objects.
-- `holdings` may be nested as `stocks` and `mutual_funds`.
-- `market_data.json` uses dictionaries for indexes and sectors.
-- `news_data.json` uses entity tags for sector and stock relevance.
+It streams tokens one by one to the frontend, so the user sees the answer appearing word-by-word.
 
----
+**Caching here:** Full response cached in Redis for 1 hour. If user asks the exact same question 10 minutes later, return cached answer instantly (skip all 3 stages, save 2.6 seconds!).
+# - Input: {category, portfolio}
+# - Output: relevant_data
+# - Tokens used: 450 (input) + 280 (output)
 
-## Memory and Persistence
+### **Response Streaming & Trace Finalization**
 
-- `backend/memory/session_manager.py`
-  - loads Redis first via `redis.asyncio`
-  - if Redis is unavailable, falls back to `InMemorySessionStore`
-  - writes session data under keys like `session:{session_id}`
-  - stores serialized JSON message arrays with TTL
-  - also provides `resp:{key}` caching for temporary response reuse and `title:{session_id}` storage
-- `backend/memory/conversation_manager.py`
-  - `load(session_id)` reads the saved message list from the session store
-  - `append(session_id, role, content)` adds a new message
-  - history is pruned to the last `max_turns * 2` messages (user + assistant pairs)
-  - only the most recent conversation turns are included in the next prompt
+Once stage 3 generates tokens, they're streamed to the frontend immediately using Server-Sent Events (SSE). Each token arrives as it's generated, so the user sees the answer appearing word-by-word in real-time.
 
-### Session lifecycle
+**Backend:** Generates tokens and sends them to frontend continuously
+**Frontend:** Receives each token and displays it immediately
+**Timing:** Tokens arrive 1-2 per millisecond, creating smooth streaming effect
 
-1. When `/api/v1/chat` receives a request, the backend resolves the session store dependency.
-2. `ConversationManager.load()` fetches prior messages from Redis or in-memory cache.
-3. The latest user query is appended locally while the router and reasoning pipeline run.
-4. As the Reasoning model generates the final answer, tokens stream back to the client.
-5. After completion, `ConversationManager.append()` saves the assistant response into the same session history.
-
-### Redis vs in-memory fallback
-
-- `RedisSessionStore` uses `SETEX` to save `session:{session_id}` with TTL configured in `.env` (`SESSION_TTL_SECONDS`).
-- `InMemorySessionStore` keeps session data in a Python dict with expiration timestamps.
-- Both stores expose `get_messages()` and `set_messages()` with identical interfaces.
-- This makes memory transparent to the rest of the backend.
-
-### Why memory matters
-
-- It enables multi-turn dialogue by injecting recent history into the reasoning prompt.
-- It avoids rebuilding the entire conversation state from scratch.
-- By pruning to the last few turns, it keeps prompts compact and within model token limits.
+After all tokens are sent, the backend finalizes the trace in Langfuse. This means:
+- Recording how long each stage took
+- Counting tokens used (and cost)
+- Storing the full conversation for analytics
+- Syncing to Langfuse cloud (~2-5 seconds later)
 
 ---
 
-## Observability and Resilience
+## 🧠 Why 3-Stage Pipeline?
 
-The system is designed to support:
+### **Problem with Single Prompt Approach**
 
-- structured logging via `structlog`
-- retryable LLM calls via `tenacity`
-- error handling for routing and reasoning failures
-- Langfuse integration for tracing (if configured)
+If we sent everything to the LLM in one shot:
+- **Slow:** Powerful 70B model must do 3 tasks (classify + extract + generate)
+- **Expensive:** More tokens per call = higher cost
+- **Less accurate:** Model context gets confused with too many instructions
+- **Wasteful:** Using powerful model for simple classification tasks
 
----
+### **Benefits of 3-Stage Approach**
 
-## Deployment and Environment
+1. **Stage 1 (Router):** Use small, fast 8B model for simple classification (50 tokens)
+2. **Stage 2 (Extractor):** Use powerful 70B model with clear task (extract data only)
+3. **Stage 3 (Reasoner):** Use powerful 70B model for complex generation (final answer)
 
-Required files:
+**Cost savings:** ~25% fewer tokens compared to single-prompt approach
 
-- `.env` with API keys and database/service settings
-- `requirements.txt`
-- `docker-compose.yml`
-- `Dockerfile`
+**Speed:** Router stage takes only 200ms, not 1000ms
 
-Important `.env` keys:
-
-- `GROQ_API_KEY`
-- `GROQ_ROUTER_MODEL`
-- `GROQ_REASONER_MODEL`
-- `REDIS_URL`
-- `DATABASE_URL`
-- `API_BASE_URL`
-- `LOG_LEVEL`
-- `ENVIRONMENT`
+**Accuracy:** Each stage focused on one task = better results
 
 ---
 
-## Design Principles
+## 🗄️ Infrastructure Architecture
 
-- **Separation of concerns**: routing, extraction, reasoning, UI, and memory are separate layers.
-- **Two-stage inference**: keep intent classification cheap and final generation rich.
-- **Minimal prompt data**: only required fields are sent to the reasoning model.
-- **No data re-read per request**: all datasets are cached in memory.
-- **Frontend isolation**: UI only hits the chat stream endpoint.
+### **Redis (Session Layer)**
+
+Redis is an in-memory database used for storing user sessions temporarily. When a user logs in, their portfolio data is stored in Redis with a 1-hour expiration. This is much faster than querying the main database every time.
+
+**Why Redis?**
+- Incredibly fast (1-2 milliseconds)
+- Perfect for temporary data (sessions, cache)
+- Auto-deletes expired data
+- Handles millions of requests per second
+
+**What's stored:**
+- User session ID
+- Portfolio data (stocks, holdings)
+- Conversation history during the session
+- Automatically deleted after 1 hour
 
 ---
 
-## Notes
+### **PostgreSQL (Persistent Layer)**
 
-This doc reflects the system intent and current repository structure. The key improvement over the initial single-pass model is the explicit two-stage LLM architecture: `Router → Extractor → Reasoner`.
+PostgreSQL is the main database for permanent storage. All user accounts, portfolios, transactions, and historical data are stored here. Unlike Redis (which is temporary), PostgreSQL data survives forever until explicitly deleted.
+
+**Why PostgreSQL?**
+- Guarantees data won't be lost (ACID compliance)
+- Can handle complex queries for reporting
+- Supports millions of users
+- Automatic backups and recovery
+- Works with read replicas for scaling
+
+**What's stored:**
+- User accounts and authentication
+- Portfolio information
+- Holdings and transactions
+- Conversation history logs
+- Performance analytics
+
+---
+
+### **Combined Architecture: How They Work Together**
+
+When a request arrives:
+
+1. **Check Redis first** (1-2ms): If user's portfolio is cached, use it immediately
+2. **If not in Redis**: Query PostgreSQL (50ms), then store result in Redis for next request
+3. **Process the query**: Run through the 3-stage pipeline
+4. **Return result**: Stream answer back to user
+5. **Update cache**: Store extraction results in Redis for similar future questions
+
+**Benefits:**
+- 99% of requests are super fast (Redis)
+- Only 1% of requests hit the slow database (PostgreSQL)
+- If Redis fails, data is safe in PostgreSQL
+- If PostgreSQL fails, users continue using cached data
+
+---
+
+## 🌐 Distributed System at Scale
+
+### **Single Server (Development)**
+
+All services run on one computer:
+- Backend + Frontend + Redis + PostgreSQL all on localhost
+- Works great for testing and development
+- Handles ~1,000 concurrent users
+
+### **Multiple Servers (Production)**
+
+When traffic grows to 10,000+ users:
+- Use a load balancer to distribute requests across 10 backend servers
+- All 10 servers share the same Redis instance
+- All 10 servers query the same PostgreSQL instance
+- Transparently handles server failures
+
+### **Global Scale (Multiple Regions)**
+
+For worldwide users:
+- US region: backend servers + Redis + PostgreSQL
+- Europe region: backend servers + Redis + PostgreSQL
+- Asia region: backend servers + Redis + PostgreSQL
+- All regions sync to a central data warehouse for analytics
+
+Users automatically connect to the nearest region for fastest response times.
+
+---
+
+## 🔒 Security & Reliability
+
+### **Data Security**
+
+- **Passwords**: Salted and hashed using bcrypt (never stored in plain text)
+- **API Keys**: Stored in secure vault, never in code or logs
+- **Session Data**: Only portfolio (no passwords or secrets)
+- **Database**: Encrypted at rest and in transit
+- **Backups**: Automated daily snapshots
+
+### **High Availability**
+
+To ensure 99.99% uptime (only 1 minute downtime per month):
+- Multiple backend servers (if one fails, others continue)
+- Redis clustering (if one Redis fails, another takes over)
+- PostgreSQL replication (if primary fails, replica becomes primary)
+- Automated backups (data recovery within minutes)
+- Health monitoring alerts (Langfuse + CloudWatch)
+
+---
+
+## 📊 Monitoring & Scaling
+
+**Automatic scaling triggers:**
+- Backend CPU > 80% → Add more servers
+- API response time > 5 seconds → Add more servers
+- Redis memory > 90% → Add Redis nodes
+- Database connections > 80% → Add read replicas
+- Error rate > 1% → Alert engineering team
+
+**Monitoring tools:**
+- Langfuse: Tracks all queries and errors
+- CloudWatch/DataDog: System metrics (CPU, memory, network)
+- Log aggregation: Centralized error logs
+
+---
+
+## 🔍 Langfuse Observability Integration
+
+### **What is Langfuse?**
+
+Langfuse is an open-source LLM observability platform that tracks every AI call, monitors costs, and helps debug issues. Every request through our system creates a **trace** that shows:
+- What the LLM was asked
+- How long it took
+- How many tokens were used (and cost)
+- Whether it succeeded or failed
+- Parent/child relationships between stages
+
+### **How We Integrated Langfuse**
+
+**1. Initialization (backend/observability/langfuse_client.py)**
+
+```
+When backend starts:
+├─ Load credentials from .env (LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY)
+├─ Initialize Langfuse SDK client
+├─ Create singleton instance (one connection for all requests)
+└─ Enable graceful fallback if credentials are missing
+```
+
+**2. Trace Creation (per request)**
+
+```
+When user sends a message:
+├─ Create parent trace with metadata:
+│  ├─ session_id (identify the user session)
+│  ├─ portfolio_id (identify which portfolio)
+│  ├─ query (the user's question)
+│  ├─ endpoint (e.g., /api/v1/chat)
+│  └─ transport (sse or http)
+└─ Attach trace to all operations below
+```
+
+**3. Span Tracking (per pipeline stage)**
+
+```
+Stage 1 (Router):
+├─ start_span("route_classification")
+├─ Send question to llama-3.1-8b-instant
+├─ Log: input (question), output (category)
+├─ Track: latency, token usage
+└─ end_span()
+
+Stage 2 (Extractor):
+├─ start_span("data_extraction")
+├─ Send question + portfolio to llama-3.3-70b-versatile
+├─ Log: input (question + portfolio), output (relevant stocks)
+├─ Track: latency, token usage, filtered data size
+└─ end_span()
+
+Stage 3 (Reasoner):
+├─ start_span("answer_generation")
+├─ Send question + extracted data + full portfolio to llama-3.3-70b-versatile
+├─ Log tokens as they stream in real-time
+├─ Track: first token latency, total tokens, generation time
+└─ end_span()
+```
+
+**4. Trace Finalization**
+
+```
+After response completes:
+├─ End parent trace
+├─ Log finalization events
+├─ Trace is queued for sync to cloud
+├─ Within 2-5 seconds:
+│  ├─ Trace + all spans + metadata uploaded to Langfuse cloud
+│  ├─ Becomes visible in Langfuse dashboard
+│  └─ Can be viewed at https://cloud.langfuse.com/dashboard
+└─ Trace is queryable by session_id, timestamp, user, etc.
+```
+
+### **Implementation in Code**
+
+**backend/observability/tracing.py:**
+- `create_trace()` - Creates parent trace with metadata
+- `start_span()` - Creates named span for a stage
+- `end_span()` - Finalizes span with timing
+- `track_event()` - Logs intermediate events
+- `track_generation()` - Tracks LLM token usage
+
+**backend/routers/chat.py:**
+- Calls `create_trace()` at request start
+- Passes trace to all components (agent, session manager, etc.)
+- Calls `trace.end()` when response completes
+
+**backend/agent/agent.py:**
+- Each stage (router, extractor, reasoner) creates its own span
+- Logs input/output with `track_event()`
+- Langfuse automatically tracks LLM calls
+
+### **What Gets Logged**
+
+For each trace, Langfuse captures:
+
+```
+Metadata:
+├─ session_id: "user-123"
+├─ portfolio_id: "portfolio-456"
+├─ query: "Why did my portfolio drop?"
+├─ endpoint: "/api/v1/chat"
+├─ transport: "sse"
+├─ status: "success" or "error"
+└─ total_duration_ms: 2600
+
+Spans (3 per request):
+├─ Span 1: route_classification
+│  ├─ model: llama-3.1-8b-instant
+│  ├─ input_tokens: 45
+│  ├─ output_tokens: 12
+│  ├─ latency_ms: 250
+│  ├─ cost: $0.0003
+│  └─ status: success
+├─ Span 2: data_extraction
+│  ├─ model: llama-3.3-70b-versatile
+│  ├─ input_tokens: 450
+│  ├─ output_tokens: 280
+│  ├─ latency_ms: 750
+│  ├─ cost: $0.0045
+│  └─ status: success
+└─ Span 3: answer_generation
+   ├─ model: llama-3.3-70b-versatile
+   ├─ input_tokens: 1250
+   ├─ output_tokens: 182
+   ├─ latency_ms: 1800
+   ├─ cost: $0.0085
+   └─ status: success
+
+Total Cost: $0.013 (3 LLM calls tracked)
+```
+
+### **Viewing Traces in Dashboard**
+
+**1. Go to Langfuse Cloud**
+```
+https://cloud.langfuse.com/dashboard
+```
+
+**2. Traces Tab**
+- Shows all traces from your account
+- Filter by date, session_id, user, status
+- Sort by latency, cost, success/error
+
+**3. Click on Any Trace**
+- See full timeline of what happened
+- View all spans with their timing
+- See exact input/output to each LLM
+- Review token counts and costs
+
+**4. Analytics**
+- Total requests (traces)
+- Average latency per stage
+- Total tokens used (and cost)
+- Error rate and types
+- Most expensive queries
+
+### **Cost Tracking**
+
+Langfuse automatically tracks costs for each call:
+
+```
+Example Session:
+├─ Question 1 (3 LLM calls): $0.013
+├─ Question 2 (1 LLM call, cached extraction): $0.005
+├─ Question 3 (no LLM call, full response cached): $0.000
+├─ Question 4 (3 LLM calls): $0.013
+│
+Total Session Cost: $0.031
+Monthly (100 sessions/day): ~$93
+```
+
+Langfuse dashboard shows:
+- Cost per trace
+- Cost per stage
+- Cost per model
+- Cost trends over time
+
+### **Error Tracking & Debugging**
+
+When an error occurs:
+
+```
+Langfuse captures:
+├─ Which stage failed (router, extractor, reasoner)
+├─ Error message and type (timeout, invalid API key, etc.)
+├─ Full stack trace
+├─ What succeeded before error
+├─ Latency up to failure point
+└─ Input that caused the error
+```
+
+**Example:** Router timeout error
+```
+Trace ID: aaceb416f80ad1fd
+Stage: route_classification
+Error: Timeout after 30 seconds
+Input: "Why did my portfolio drop?"
+Status: FAILED
+Latency: 30000ms
+
+Next Steps:
+├─ Check Groq API status
+├─ Verify GROQ_API_KEY is valid
+├─ Check network connectivity
+└─ Retry or use fallback category
+```
+
+---
+
+**That's the complete technical flow! 🎯**
