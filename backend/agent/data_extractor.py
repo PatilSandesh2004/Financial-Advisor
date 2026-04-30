@@ -6,17 +6,29 @@ Extracts only requested fields to minimize token usage in reasoner call.
 from __future__ import annotations
 
 import json
+import time
+from backend.observability.tracing import capture_exception, start_span
 
 
 class DataExtractor:
     """Extracts and filters data based on routing decision."""
 
-    def extract(self, routing: dict, all_data: dict) -> str:
+    def extract(self, routing: dict, all_data: dict, trace=None) -> str:
         """
         Filter all_data based on routing decision.
         Returns compact JSON string with only requested data.
         """
+        span = start_span(
+            trace,
+            "data-extraction",
+            router_plan=routing,
+            datasets_touched=[key for key in ["funds", "stocks", "sectors", "market", "news"] if routing.get(key)],
+        )
+        start = time.perf_counter()
         result = {}
+        
+        print(f"\n[DATA EXTRACTOR] 📦 Extracting data based on routing decision...")
+        print(f"[DATA EXTRACTOR]   Routing plan: {routing}")
 
         # Extract funds
         if routing.get("funds") and routing["funds"].get("ids"):
@@ -25,6 +37,7 @@ class DataExtractor:
                 fields=routing["funds"].get("fields", ["basic"]),
                 all_data=all_data,
             )
+            print(f"[DATA EXTRACTOR] ✅ Funds extracted: {len(result['funds'])} funds")
 
         # Extract stocks
         if routing.get("stocks"):
@@ -32,6 +45,7 @@ class DataExtractor:
                 stock_symbols=routing["stocks"],
                 all_data=all_data,
             )
+            print(f"[DATA EXTRACTOR] ✅ Stocks extracted: {len(result['stocks'])} stocks")
 
         # Extract sectors
         if routing.get("sectors"):
@@ -39,6 +53,7 @@ class DataExtractor:
                 sector_names=routing["sectors"],
                 all_data=all_data,
             )
+            print(f"[DATA EXTRACTOR] ✅ Sectors extracted: {len(result['sectors'])} sectors")
 
         # Extract market data
         if routing.get("market"):
@@ -46,6 +61,7 @@ class DataExtractor:
                 market_types=routing["market"],
                 all_data=all_data,
             )
+            print(f"[DATA EXTRACTOR] ✅ Market data extracted: {len(result['market'])} items")
 
         # Extract news
         if routing.get("news"):
@@ -53,21 +69,56 @@ class DataExtractor:
                 news_types=routing["news"],
                 all_data=all_data,
             )
+            print(f"[DATA EXTRACTOR] ✅ News extracted: {len(result['news'])} items")
 
         # Include portfolio if available (from context)
         if "portfolio" in all_data:
             result["portfolio"] = all_data["portfolio"]
+            print(f"[DATA EXTRACTOR] ✅ Portfolio data included")
 
         if "market_insights" in all_data:
             result["market_insights"] = all_data["market_insights"]
+            print(f"[DATA EXTRACTOR] ✅ Market insights included")
 
         if "portfolio_insights" in all_data:
             result["portfolio_insights"] = all_data["portfolio_insights"]
+            print(f"[DATA EXTRACTOR] ✅ Portfolio insights included")
 
         if "relevant_news" in all_data:
             result["relevant_news"] = all_data["relevant_news"]
+            print(f"[DATA EXTRACTOR] ✅ Relevant news included")
 
-        return json.dumps(result, indent=2)
+        payload = json.dumps(result, indent=2)
+        
+        print(f"\n[DATA EXTRACTOR] 📊 EXTRACTED DATA JSON:")
+        print(f"─" * 80)
+        print(payload[:1500])
+        if len(payload) > 1500:
+            print(f"... ({len(payload) - 1500} more characters)")
+        print(f"─" * 80)
+        
+        try:
+            extracted = json.loads(payload)
+            span.set_metadata(
+                retrieved_fund_count=len(extracted.get("funds", {})),
+                retrieved_stock_count=len(extracted.get("stocks", {})),
+                retrieved_sector_count=len(extracted.get("sectors", {})),
+                retrieved_market_blocks=len(extracted.get("market", {})),
+                retrieved_news_count=len(extracted.get("news", [])),
+                filtered_row_count=sum(
+                    len(v) if isinstance(v, dict) else len(v)
+                    for v in extracted.values()
+                ),
+                compact_payload_size=len(payload),
+            )
+        except Exception:
+            span.set_metadata(compact_payload_size=len(payload))
+        finally:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            span.set_metadata(duration_ms=duration_ms)
+            span.end()
+
+        return payload
 
     def _extract_funds(self, fund_ids: list, fields: list, all_data: dict) -> dict:
         """Extract fund data with requested fields."""
