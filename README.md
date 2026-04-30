@@ -1,6 +1,6 @@
 # Autonomous Financial Advisor
 
-A ChatGPT-style financial advisor that explains Indian portfolio movements through a causal chain:
+A  financial advisor that explains Indian portfolio movements through a causal chain:
 **Macro News → Sector Trend → Stock Impact → Portfolio Impact**
 
 Built with FastAPI (backend) + Streamlit (frontend) + Groq LLaMA (LLM) + Redis (session memory).
