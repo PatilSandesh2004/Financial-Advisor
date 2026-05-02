@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 from typing import Iterable
 
 import httpx
 
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8050").rstrip("/")
 
 
+@lru_cache(maxsize=32)
 def list_portfolios() -> list[dict]:
     try:
         resp = httpx.get(f"{API_BASE_URL}/api/v1/portfolios", timeout=10)
@@ -22,6 +24,7 @@ def list_portfolios() -> list[dict]:
         return []
 
 
+@lru_cache(maxsize=128)
 def get_portfolio(portfolio_id: str) -> dict | None:
     try:
         resp = httpx.get(f"{API_BASE_URL}/api/v1/portfolios/{portfolio_id}", timeout=10)

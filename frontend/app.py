@@ -229,8 +229,6 @@ def handle_input() -> None:
             chunk_type = chunk.get("type")
             if chunk_type == "token":
                 return str(chunk.get("content", ""))
-            if chunk_type == "thinking":
-                return ""
             if chunk_type == "error":
                 raise RuntimeError(chunk.get("content", "Unknown error"))
             return str(chunk.get("content", ""))
@@ -238,6 +236,7 @@ def handle_input() -> None:
 
     with st.chat_message("assistant"):
         placeholder = st.empty()
+        status_placeholder = st.empty()
         placeholder.markdown("_Thinking…_")
         accumulated = ""
         try:
@@ -246,14 +245,44 @@ def handle_input() -> None:
                 message=prompt,
                 portfolio_id=portfolio_id,
             ):
+                # Handle intermediate 'thinking' events to show resources/steps
+                if isinstance(chunk, dict) and chunk.get("type") == "thinking":
+                    step = chunk.get("step")
+                    parts: list[str] = []
+                    if step:
+                        parts.append(f"**Step:** {step}")
+                    # show available resource hints when present
+                    if "stocks" in chunk:
+                        parts.append(f"**Stocks:** {chunk.get('stocks')}")
+                    if "sectors" in chunk:
+                        parts.append(f"**Sectors:** {chunk.get('sectors')}")
+                    if "news" in chunk:
+                        parts.append(f"**News items:** {chunk.get('news')}")
+                    if "funds" in chunk:
+                        parts.append(f"**Funds:** {chunk.get('funds')}")
+                    if "filtered_kb" in chunk:
+                        parts.append(f"**Filtered KB:** {chunk.get('filtered_kb')} KB")
+                    if "model" in chunk:
+                        parts.append(f"**Model:** {chunk.get('model')}")
+
+                    status_html = "<br>".join(parts) if parts else "_Thinking..._"
+                    # update both the small status box and the assistant placeholder so users see it live
+                    status_placeholder.markdown(status_html, unsafe_allow_html=True)
+                    # show thinking inline in the assistant message while tokens stream
+                    thinking_inline = f"<div style=\"color:#6b6b7b; margin-top:0.5rem; font-style:italic;\">{status_html}</div>"
+                    placeholder.markdown((accumulated or "") + "\n\n" + thinking_inline + "▌", unsafe_allow_html=True)
+                    continue
+
                 content = _chunk_text(chunk)
                 if content:
                     accumulated += content
                     placeholder.markdown(accumulated + "▌")
             placeholder.markdown(accumulated)
+            status_placeholder.empty()
         except Exception as exc:
             accumulated = f"**Connection Error:** {exc}"
             placeholder.markdown(accumulated)
+            status_placeholder.empty()
 
     append_message("assistant", accumulated)
 

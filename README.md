@@ -8,6 +8,118 @@ Built with **FastAPI** (backend) + **Streamlit** (frontend) + **Groq LLaMA** (AI
 
 ## 🚀 Quick Setup (5 Minutes)
 
+### Clone the repo
+
+```bash
+git clone https://github.com/PatilSandesh2004/Financial-Advisor.git
+cd Financial-Advisor/Financial-Advisor
+```
+
+Follow the appropriate platform section below to create a virtualenv, install dependencies, and run the app in two terminals (backend + frontend).
+
+---
+
+## 🔧 Quick Demo Guide
+
+Clone, configure and run the project. Repository: https://github.com/PatilSandesh2004/Financial-Advisor.git
+
+1) Clone the repo
+
+```bash
+git clone https://github.com/PatilSandesh2004/Financial-Advisor.git
+cd Financial-Advisor/Financial-Advisor
+```
+
+2) Create & activate a virtual environment
+
+Linux / macOS
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Windows PowerShell
+```powershell
+python -m venv .venv
+. .venv\Scripts\Activate.ps1
+```
+
+3) Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+4) Create a `.env` file in the project root (required)
+
+Add at minimum (do NOT commit this file):
+
+```env
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_ROUTER_MODEL=llama-3.1-8b-instant
+REDIS_URL=redis://localhost:6379
+DATABASE_URL=sqlite:///portfolio.db
+API_BASE_URL=http://127.0.0.1:8050
+LOG_LEVEL=INFO
+```
+
+5) Start the app — use TWO terminals
+
+Terminal A (backend):
+
+Linux/macOS
+```bash
+source .venv/bin/activate
+export API_BASE_URL="http://127.0.0.1:8050"    # optional if set in .env
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8050 --reload
+```
+
+Windows PowerShell
+```powershell
+. .venv\Scripts\Activate.ps1
+$env:API_BASE_URL = "http://127.0.0.1:8050"
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8050 --reload
+```
+
+Terminal B (frontend):
+
+Linux/macOS
+```bash
+source .venv/bin/activate
+export API_BASE_URL="http://127.0.0.1:8050"
+streamlit run frontend/app.py --server.port 8501
+```
+
+Windows PowerShell
+```powershell
+. .venv\Scripts\Activate.ps1
+$env:API_BASE_URL = "http://127.0.0.1:8050"
+streamlit run frontend/app.py --server.port 8501
+```
+
+6) Verify
+
+- Backend health: http://127.0.0.1:8050/api/v1/health
+- Frontend UI: http://localhost:8501
+
+7) Quick demo script (what to show)
+
+- Open frontend, select or seed a portfolio.
+- Ask a simple question: "Why did my portfolio drop today?"
+  - Show the inline "thinking" updates (routing, extraction) and the streamed tokens.
+- Ask a follow-up: "What are the top 3 risks?"
+
+8) Troubleshooting
+
+- "Backend not reachable": ensure backend running and `API_BASE_URL` matches port.
+- Redis refused: start a Redis instance (`docker run -d -p 6379:6379 redis:alpine`).
+- Missing GROQ key: set `GROQ_API_KEY` in `.env`.
+
+Notes:
+- Keep `.env` private; do not push keys to GitHub.
+- If you prefer not to create `.env`, export `API_BASE_URL` in your shell before running Streamlit.
+
 ### **Step 1: Prepare Your Environment**
 
 ```bash
@@ -49,6 +161,68 @@ REDIS_URL=redis://localhost:6379
 DATABASE_URL=sqlite:///portfolio.db
 API_BASE_URL=http://127.0.0.1:8050
 LOG_LEVEL=INFO
+
+**Important (for running the demo):**
+
+- Create the `.env` file in the project root exactly as shown above before starting the backend or frontend. The backend loads configuration from this file (API keys, Redis/DB URLs, `API_BASE_URL`), and the frontend expects `API_BASE_URL` to be set (it will also read from your shell environment). If `.env` is missing or incorrect the frontend will show "Backend not reachable." Keep your API keys secret and do not commit `.env` to source control.
+
+If you prefer to export `API_BASE_URL` for the current shell session instead of using `.env`, run (Linux/macOS):
+
+```bash
+# export API_BASE_URL for the current shell only
+export API_BASE_URL="http://127.0.0.1:8050"
+```
+
+Or in Windows PowerShell (for the current session):
+
+```powershell
+# set API_BASE_URL for this PowerShell session
+$env:API_BASE_URL = "http://127.0.0.1:8050"
+```
+
+---
+
+## Run the app (two terminals)
+
+Open two terminals after creating/activating the virtualenv and installing dependencies.
+
+Terminal 1 — Backend:
+
+Linux/macOS:
+```bash
+# activate venv (if not already active)
+source .venv/bin/activate
+# (optional) ensure API_BASE_URL is exported
+export API_BASE_URL="http://127.0.0.1:8050"
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8050 --reload
+```
+
+Windows PowerShell:
+```powershell
+# activate venv
+. .venv\Scripts\Activate.ps1
+# set API_BASE_URL for this session
+$env:API_BASE_URL = "http://127.0.0.1:8050"
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8050 --reload
+```
+
+Terminal 2 — Frontend:
+
+Linux/macOS:
+```bash
+source .venv/bin/activate
+export API_BASE_URL="http://127.0.0.1:8050"
+streamlit run frontend/app.py --server.port 8501
+```
+
+Windows PowerShell:
+```powershell
+. .venv\Scripts\Activate.ps1
+$env:API_BASE_URL = "http://127.0.0.1:8050"
+streamlit run frontend/app.py --server.port 8501
+```
+
+Open the frontend at: http://localhost:8501 and the backend health at: http://127.0.0.1:8050/api/v1/health
 ```
 
 ### **Step 4: Start Redis (Session Storage)**
