@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Financial Advisor</title>
+    <link rel="stylesheet" href="css/styles.css?v=2" />
+</head>
+<body>
+    <div id="app">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-brand">Financial Advisor</div>
+                <button class="new-chat-btn" id="new-chat">+ New chat</button>
+            </div>
+
+            <div>
+                <div class="sessions-title">Recent chats</div>
+                <div id="sessions-list" class="sessions-list"></div>
+            </div>
+
+            <div class="portfolio-section">
+                <div class="sessions-title">Portfolio</div>
+                <select id="portfolio-select"></select>
+                <div id="portfolio-stats" class="stats-container"></div>
+            </div>
+
+            <div class="connection-status">
+                <span id="status-dot" class="status-dot connected"></span>
+                <span id="status-text">Connecting...</span>
+            </div>
+        </aside>
+
+        <main class="main">
+            <div class="chat-header">
+                <div>
+                    <h1 id="chat-title">Financial Advisor</h1>
+                    <p id="header-subtitle" class="chat-subtitle"></p>
+                </div>
+            </div>
+
+            <div id="empty-state" class="empty-state">
+                <div class="empty-icon">💼</div>
+                <div class="empty-text">
+                    <h2>Welcome to Financial Advisor</h2>
+                    <p>Ask about your portfolio, market trends, or investment strategy.</p>
+                </div>
+                <div class="suggestions">
+                    <button class="suggestion-pill" onclick="(()=>{const i=document.getElementById('message-input'); i.value='What sectors should I increase?'; i.focus();})()">What sectors should I increase?</button>
+                    <button class="suggestion-pill" onclick="(()=>{const i=document.getElementById('message-input'); i.value='Analyze my portfolio risk'; i.focus();})()">Analyze portfolio risk</button>
+                    <button class="suggestion-pill" onclick="(()=>{const i=document.getElementById('message-input'); i.value='Market trends today'; i.focus();})()">Market trends today</button>
+                </div>
+            </div>
+
+            <div id="messages-area" class="messages-container"></div>
+
+            <div class="input-area">
+                <form id="message-form" class="input-form">
+                    <textarea id="message-input" placeholder="Ask your financial question..." rows="1"></textarea>
+                    <button type="submit" class="send-btn" title="Send">➤</button>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <script src="js/config.js?v=2"></script>
+    <script src="js/api.js?v=2"></script>
+    <script src="js/ui.js?v=2"></script>
+    <script src="js/app.js?v=2"></script>
+</body>
+</html>

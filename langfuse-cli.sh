@@ -72,16 +72,16 @@ case "$1" in
         ;;
         
     "frontend")
-        print_header "📱 STARTING STREAMLIT FRONTEND"
+        print_header "📱 STARTING STATIC UI"
         
         print_info "Loading environment variables..."
-        cd "$PROJECT_DIR"
+        cd "$PROJECT_DIR/UI"
         set -a
-        source .env
+        source ../.env
         set +a
         
-        print_info "Starting Streamlit on port 8501..."
-        streamlit run frontend/app.py --server.port 8501
+        print_info "Starting UI on port 8080..."
+        $PYTHON -m http.server 8080
         ;;
         
     "monitor")
@@ -109,11 +109,11 @@ case "$1" in
         ;;
         
     "frontend-ui")
-        print_header "🌐 OPENING STREAMLIT UI"
+        print_header "🌐 OPENING UI"
         
-        print_info "Opening Streamlit UI..."
+        print_info "Opening UI..."
         echo ""
-        echo "UI URL: http://localhost:8501"
+        echo "UI URL: http://localhost:8080"
         echo ""
         print_info "Instructions:"
         echo "  1. Type a message (e.g., 'What are the risks?')"
@@ -124,11 +124,11 @@ case "$1" in
         
         # Try to open in browser (if available)
         if command -v xdg-open &> /dev/null; then
-            xdg-open "http://localhost:8501"
+            xdg-open "http://localhost:8080"
         elif command -v open &> /dev/null; then
-            open "http://localhost:8501"
+            open "http://localhost:8080"
         else
-            print_info "Manually open: http://localhost:8501"
+            print_info "Manually open: http://localhost:8080"
         fi
         ;;
         

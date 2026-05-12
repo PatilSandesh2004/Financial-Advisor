@@ -2,7 +2,7 @@
 
 A **lightweight, intelligent financial advisor** that explains Indian portfolio movements through causal reasoning: **Macro News → Sector Trend → Stock Impact → Portfolio Impact**
 
-Built with **FastAPI** (backend) + **Streamlit** (frontend) + **Groq LLaMA** (AI reasoning) + **Redis** (session memory) + **Langfuse** (observability).
+Built with **FastAPI** (backend) + **HTML/CSS/JS** (frontend) + **Groq LLaMA** (AI reasoning) + **Redis** (session memory) + **Langfuse** (observability).
 
 ---
 
@@ -25,7 +25,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**Required packages:** fastapi, uvicorn, streamlit, langfuse, groq, redis, httpx, python-dotenv, pydantic
+**Required packages:** fastapi, uvicorn, langfuse, groq, redis, httpx, python-dotenv, pydantic
 
 ### **Step 3: Configure Your Environment**
 
@@ -75,11 +75,11 @@ PYTHONPATH=/home/sandeshpatil/Downloads/Financial-Advisor/Financial-Advisor \
 
 ```bash
 # In terminal 2
-set -a && source .env && set +a
-streamlit run frontend/app.py --server.port 8501
+cd /home/sandeshpatil/Downloads/Financial-Advisor/Financial-Advisor/UI
+python3 -m http.server 8080
 ```
 
-✅ Frontend ready at: http://localhost:8501
+✅ Frontend ready at: http://localhost:8080
 
 ---
 
@@ -711,7 +711,7 @@ export PYTHONPATH=/home/sandeshpatil/Downloads/Financial-Advisor/Financial-Advis
 python3 -m uvicorn backend.main:app --port 8050 --reload
 ```
 
-### **Streamlit not connecting to backend**
+### **UI not connecting to backend**
 
 ```bash
 # Verify backend is running
@@ -721,7 +721,7 @@ curl http://127.0.0.1:8050/api/v1/health
 cat .env | grep API_BASE_URL
 
 # Restart frontend
-streamlit run frontend/app.py --server.port 8501
+cd UI && python3 -m http.server 8080
 ```
 
 ### **Redis connection fails**
@@ -766,7 +766,7 @@ cat .env | grep LANGFUSE
 A  financial advisor that explains Indian portfolio movements through a causal chain:
 **Macro News → Sector Trend → Stock Impact → Portfolio Impact**
 
-Built with FastAPI (backend) + Streamlit (frontend) + Groq LLaMA (LLM) + Redis (session memory).
+Built with FastAPI (backend) + HTML/CSS/JS (frontend) + Groq LLaMA (LLM) + Redis (session memory).
 
 ---
 
@@ -791,10 +791,11 @@ docker compose up -d redis
 uvicorn backend.main:app --reload --port 8000
 
 # 6. Start frontend (separate terminal)
-streamlit run frontend/app.py --server.port 8501
+cd UI
+python3 -m http.server 8080
 ```
 
-- **Frontend:** http://localhost:8501
+- **Frontend:** http://localhost:8080
 - **API Docs:** http://localhost:8000/docs
 - **Health:** http://localhost:8000/api/v1/health
 
