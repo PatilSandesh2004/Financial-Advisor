@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: financial-advisor-backend
+    env: docker
+    plan: starter
+    dockerfilePath: Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: financial-advisor-db
+          property: connectionString
+      - key: REDIS_URL
+        fromDatabase:
+          name: financial-advisor-redis
+          property: connectionString
+      - key: LANGFUSE_PUBLIC_KEY
+        value: ""
+      - key: LANGFUSE_SECRET_KEY
+        value: ""
+      - key: LANGFUSE_BASE_URL
+        value: ""
+
+  - type: web
+    name: financial-advisor-ui
+    env: docker
+    plan: starter
+    dockerfilePath: UI/web/Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: UI_API_BASE_URL
+        value: https://financial-advisor-backend.onrender.com/api/v1
+
+databases:
+  - type: postgres
+    name: financial-advisor-db
+    plan: starter
+
+  - type: redis
+    name: financial-advisor-redis
+    plan: starter
