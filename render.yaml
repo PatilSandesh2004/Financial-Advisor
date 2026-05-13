@@ -23,15 +23,10 @@ services:
       - key: LANGFUSE_BASE_URL
         value: ""
 
-  - type: web
+  - type: static_site
     name: financial-advisor-ui
-    env: docker
-    plan: starter
-    dockerfilePath: UI/Dockerfile
+    staticPublishPath: UI
     autoDeploy: true
-    envVars:
-      - key: UI_API_BASE_URL
-        value: https://financial-advisor-backend.onrender.com/api/v1
 
 databases:
   - type: postgres
