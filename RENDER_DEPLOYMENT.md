@@ -104,7 +104,7 @@ Optional but recommended if the app requires it:
 - Type: `Web Service`
 - Name: `financial-advisor-ui`
 - Environment: `Docker`
-- Dockerfile Path: `UI/web/Dockerfile`
+- Dockerfile Path: `UI/Dockerfile`
 - Branch: same repo branch
 
 ### Environment variables for UI

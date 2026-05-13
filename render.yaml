@@ -25,7 +25,7 @@ services:
     name: financial-advisor-ui
     env: docker
     plan: starter
-    dockerfilePath: UI/web/Dockerfile
+    dockerfilePath: UI/Dockerfile
     autoDeploy: true
     envVars:
       - key: UI_API_BASE_URL
