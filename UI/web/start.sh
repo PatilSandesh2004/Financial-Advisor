@@ -7,4 +7,5 @@ const CONFIG = {
 window.CONFIG = CONFIG;
 EOF
 
-exec python3 -m http.server 8080
+cd /app
+exec python3 -m http.server --bind 0.0.0.0 8080
