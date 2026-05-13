@@ -113,7 +113,7 @@ Optional but recommended if the app requires it:
 
 - `UI_API_BASE_URL`
   - Set this to the backend API URL:
-    - `https://financial-advisor-backend.onrender.com/api/v1`
+    - `https://financial-advisor-backend-dd0g.onrender.com/api/v1`
 
 ### Notes
 
