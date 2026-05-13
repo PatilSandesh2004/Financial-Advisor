@@ -27,7 +27,7 @@ services:
     name: financial-advisor-ui
     runtime: static
     rootDir: UI
-    staticPublishPath: UI
+    staticPublishPath: .
     autoDeploy: true
     envVars:
       - key: SKIP_INSTALL_DEPS
