@@ -25,8 +25,13 @@ services:
 
   - type: static_site
     name: financial-advisor-ui
+    runtime: static
+    rootDir: UI
     staticPublishPath: UI
     autoDeploy: true
+    envVars:
+      - key: SKIP_INSTALL_DEPS
+        value: "true"
 
 databases:
   - type: postgres
