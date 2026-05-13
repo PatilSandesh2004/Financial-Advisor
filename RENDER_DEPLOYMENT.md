@@ -73,6 +73,8 @@ redis://:password@host:6379/0
 
 Add these environment variables to the backend service:
 
+- `GROQ_API_KEY`
+  - Your Groq API key from https://console.groq.com
 - `DATABASE_URL`
   - Use the Postgres connection string from `financial-advisor-db`
 - `REDIS_URL`
