@@ -99,26 +99,53 @@ Optional but recommended if the app requires it:
 
 ---
 
-## 4. Create the UI service
+## 4. Create the UI service (Static Site)
 
-### Service settings
+### Step-by-Step Deployment
 
-- Type: `Web Service`
-- Name: `financial-advisor-ui`
-- Environment: `Docker`
-- Dockerfile Path: `UI/Dockerfile`
-- Branch: same repo branch
+1. **Go to Render Dashboard** → Click **"New +"** → Select **"Static Site"**
 
-### Environment variables for UI
+2. **Connect Repository:**
+   - Click **"Connect Repository"**
+   - Search for `Financial-Advisor`
+   - Select `PatilSandesh2004/Financial-Advisor`
+   - Click **"Connect"**
 
-- `UI_API_BASE_URL`
-  - Set this to the backend API URL:
-    - `https://financial-advisor-backend-dd0g.onrender.com/api/v1`
+3. **Fill in these fields:**
 
-### Notes
+| Field | Value to Enter |
+|-------|-----------------|
+| **Name** | `financial-advisor-ui` |
+| **Branch** | `deployment` |
+| **Build Command** | (Leave **EMPTY** - no build needed) |
+| **Publish Directory** | `UI` |
 
-- The UI is static and only needs the backend URL.
-- The UI must call the backend through the public Render address, not `localhost`.
+4. **Click "Create Static Site"**
+
+---
+
+### What Each Field Means:
+
+- **Name:** Your service name on Render (can be anything, we use `financial-advisor-ui`)
+- **Branch:** Which GitHub branch to deploy from (use `deployment`)
+- **Build Command:** Leave empty (no build process needed - just serve files)
+- **Publish Directory:** The folder containing your HTML files (use `UI` - not `UI/web`, just `UI`)
+
+---
+
+### Why This Works:
+
+✅ Render will serve all files from the `UI` folder
+✅ `index.html` is automatically served as default
+✅ `config.js` loads with your backend URL
+✅ CSS and JS files load correctly
+✅ **No Python installation needed**
+
+---
+
+### After Deployment:
+
+Your UI will be live at: `https://financial-advisor-ui.onrender.com`
 
 ---
 
